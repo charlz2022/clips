@@ -38,7 +38,7 @@ export class ClipService {
         const query = this.clipsCollection.ref.where(
           'uid', '==', user.uid
         ).orderBy(
-          'timestamp',
+          'timeStamp',
           sort === '1' ? 'desc' : 'asc'
         )
         // This executes the queries defined above.
@@ -47,24 +47,6 @@ export class ClipService {
       map(snapshot => (snapshot as QuerySnapshot<IClip>).docs) 
     )
   }
-
-  // getUserClips() {
-  //   return this.auth.user.pipe(
-  //     switchMap(user => {
-  //       if(!user) {
-  //         return of([]) // The of operator will create an observable that pushes the value pass into it.
-  //       }
-  //       // This define the query to Firebase
-  //       const query = this.clipsCollection.ref.where(
-  //         'uid', '==', user.uid
-  //       )
-  //       // This executes the queries defined above.
-  //       return query.get()
-  //     }),
-  //     map(snapshot => (snapshot as QuerySnapshot<IClip>).docs) 
-  //   )
-  // }
-
 
   // This will update the title in Firebase
   updateClip(id: string, title: string) {

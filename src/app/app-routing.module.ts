@@ -4,6 +4,7 @@ import { AboutComponent } from './about/about.component';
 import { ClipComponent } from './clip/clip.component';
 import { HomeComponent } from './home/home.component';
 import { NotFoundComponent } from './not-found/not-found.component';
+import { ClipService } from './services/clip.service';
 
 const routes: Routes = [
   {
@@ -18,7 +19,14 @@ const routes: Routes = [
     // :id where the id of the clip dynamically assigned
     // depending on the user selection.
     path: "clip/:id", 
-    component: ClipComponent
+    component: ClipComponent,
+    resolve: {
+      clip: ClipService
+    }
+  },
+  {
+    path: '',
+    loadChildren: async () => (await import('./video/video.module')).VideoModule
   },
   {
     path: '**',

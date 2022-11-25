@@ -1,14 +1,15 @@
 import { Component, OnDestroy } from '@angular/core';
 import { AngularFireStorage, AngularFireUploadTask } from '@angular/fire/compat/storage';
 import { FormControl, FormGroup, Validators } from '@angular/forms';
-// Install uuid - npm install uuid @type/uuid
+// Install uuid - npm install uuid @types/uuid
 // used for file upload naming to be unique.
 import { v4 as uuid } from 'uuid';
-import { last, switchMap } from 'rxjs';
+import { combineLatest, forkJoin, switchMap } from 'rxjs';
 import { AngularFireAuth } from '@angular/fire/compat/auth';
 import firebase from 'firebase/compat/app';
 import { ClipService } from 'src/app/services/clip.service';
 import { Router } from '@angular/router';
+import { FfmpegService } from 'src/app/services/ffmpeg.service';
 
 @Component({
   selector: 'app-upload',
@@ -22,14 +23,17 @@ export class UploadComponent implements OnDestroy {
   percentage = 0
   showPercentage = false
   user: firebase.User | null = null
-
   // For Message Alert
   showAlert = false
   alertColor = 'blue'
   alertMsg = 'Please wait! Your clip is being uploaded.'
-  // Property responsible for disabling the Upload form.
+    // Property responsible for disabling the Upload form.
   inSubmission = false
+  
   task?: AngularFireUploadTask
+  screenshots: string[] = []
+  selectedScreenshot = ''
+  screenshotTask?: AngularFireUploadTask
 
   // Angular 12 version syntax
   // title = new FormControl('', [
@@ -54,16 +58,22 @@ export class UploadComponent implements OnDestroy {
     private storage: AngularFireStorage,
     private auth: AngularFireAuth,
     private clipService: ClipService,
-    private router: Router
+    private router: Router,
+    public ffmpegService: FfmpegService
   ) {
     auth.user.subscribe(user => this.user = user)
+    this.ffmpegService.init()
   }
 
   ngOnDestroy(): void {
     this.task?.cancel()
   }
 
-  storeFile($event: Event) {
+  async storeFile($event: Event) {
+    if(this.ffmpegService.isRunning) {
+      return
+    }
+
     this.isDragOver = false
 
     this.file = ($event as DragEvent).dataTransfer ?
@@ -73,6 +83,11 @@ export class UploadComponent implements OnDestroy {
     if(!this.file || this.file.type !== 'video/mp4') {
       return
     }
+
+    this.screenshots = await this.ffmpegService.getScreenshots(this.file)
+
+    this.selectedScreenshot = this.screenshots[0]
+
     // This will set the name of file to title element.
     this.title.setValue(
       // This will remove file extension of the file
@@ -82,7 +97,7 @@ export class UploadComponent implements OnDestroy {
     this.nextStep = true
   }
 
-  uploadFile() {
+  async uploadFile() {
     this.uploadForm.disable()
 
     this.showAlert = true
@@ -90,30 +105,58 @@ export class UploadComponent implements OnDestroy {
     this.alertMsg = 'Please wait! Your clip is being uploaded.'
     this.inSubmission = true
     this.showPercentage = true
-
+    // responsible for uploading path and filename in Firestore
     const clipFileName = uuid()
     const clipPath = `clips/${clipFileName}.mp4`
+    // responsible for uploading screenshot in Firestore
+    const screenshotBlob = await this.ffmpegService.blobFromURL(
+      this.selectedScreenshot)
+    const screenshotPath = `screenshots/${clipFileName}.png`
 
     this.task = this.storage.upload(clipPath, this.file)
     const clipRef = this.storage.ref(clipPath)
 
-    this.task.percentageChanges().subscribe(progress => {
+    this.screenshotTask = this.storage.upload(
+      screenshotPath, screenshotBlob
+    )
+    const screenshotRef = this.storage.ref(screenshotPath)
+
+    combineLatest([
+      this.task.percentageChanges(),
+      this.screenshotTask.percentageChanges()
+    ]).subscribe((progress) => {
+      const [clipProgress, screenshotProgress] = progress
+
+      if(!clipProgress || !screenshotProgress) {
+        return
+      }
+
+      const total = clipProgress + screenshotProgress
       // as is a type predicate from TypeScript that define progress as number type.
       // divide by 100 to display the progress in 100s
-      this.percentage = progress as number / 100
+      this.percentage = total as number / 200
     })
 
-    this.task.snapshotChanges().pipe(
-      last(), // This is an rxjs function that will check the last snapshot.
-      switchMap(() => clipRef.getDownloadURL()) // Retrieved clip url
+    forkJoin([
+      this.task.snapshotChanges(),
+      this.screenshotTask.snapshotChanges()
+    ]).pipe(
+      switchMap(() => forkJoin([
+        clipRef.getDownloadURL(),
+        screenshotRef.getDownloadURL()
+      ]))
     ).subscribe({
-      next: async (url) => {
+      next: async (urls) => {
+        const [clipURL, screenshotURL] = urls
+
         const clip = {
           uid: this.user?.uid as string,
           displayName: this.user?.displayName as string,
           title: this.title.value,
           fileName: `${clipFileName}.mp4`,
-          url,
+          url: clipURL,
+          screenshotURL,
+          screenshotFilename: `${clipFileName}.png`,
           timeStamp: firebase.firestore.FieldValue.serverTimestamp()
         }
 
@@ -133,7 +176,6 @@ export class UploadComponent implements OnDestroy {
       },
       error: (error) => {
         this.uploadForm.enable() // Enables the formGroup controls.
-
         this.alertColor = 'red'
         this.alertMsg = 'Upload failed! Please try again later.'
         this.inSubmission = true
